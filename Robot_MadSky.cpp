@@ -6,109 +6,126 @@
 class Robot_MadSky : public RobotBase {
     private:
         bool m_moving_right = true;
+        bool m_at_top = false; 
+        bool m_scan_down = false; 
         int to_shoot_row = -1;
         int to_shoot_col = -1;
+        int m_last_radar_dir = 5; 
 
         std::vector<RadarObj> known_obstacles;
 
-        bool is_obstacle(int row, int col) const {
-            return std::any_of(known_obstacles.begin(), known_obstacles.end(), [&](const RadarObj& obj) {
-                return obj.m_row == row && obj.m_col == col;
-            });
-        }
-
-        void clear_target() {
-            to_shoot_row = -1;
-            to_shoot_col = -1;
-        }
+        void clear_target() { to_shoot_row = -1; to_shoot_col = -1; }
 
         void add_obstacle(const RadarObj& obj) {
-            if ((obj.m_type == 'M' || obj.m_type == 'P' || obj.m_type == 'F') && !is_obstacle(obj.m_row, obj.m_col)) {
+            if ((obj.m_type == 'M' || obj.m_type == 'P' || obj.m_type == 'F' || obj.m_type == 'X')) {
+                for(auto& obs : known_obstacles) {
+                    if(obs.m_row == obj.m_row && obs.m_col == obj.m_col) return;
+                }
                 known_obstacles.push_back(obj);
             }
         }
-    
+
+        bool is_blocked(int r, int c) {
+            for(auto& obs : known_obstacles) {
+                if(obs.m_row == r && obs.m_col == c) return true;
+            }
+            return false;
+        }
+
     public:
-        Robot_MadSky() : RobotBase(3, 4, railgun) {}
+        Robot_MadSky() : RobotBase(1, 6, railgun) {}
 
         virtual void get_radar_direction(int& radar_direction) override {
-            int current_row, current_col;
-            get_current_location(current_row, current_col);
+            int r, c;
+            get_current_location(r, c);
 
-            radar_direction = (current_col > 0) ? 7 : 3; // Left or Right
+            if (r == 0) m_at_top = true;
+
+            if (!m_at_top) {
+                radar_direction = 1; 
+            } else if (to_shoot_row != -1) {
+                radar_direction = m_last_radar_dir;
+            } else {
+                if (m_scan_down) {
+                    radar_direction = 5; 
+                } else {
+                    radar_direction = m_moving_right ? 3 : 7; 
+                }
+                m_last_radar_dir = radar_direction;
+                m_scan_down = !m_scan_down;
+            }
         }
 
         virtual void process_radar_results(const std::vector<RadarObj>& radar_results) override {
-            clear_target();
+            bool found_robot = false;
+            int potential_row = -1;
+            int potential_col = -1;
 
             for (const auto& obj : radar_results) {
-                // Add static obstacles to the obstacle list
                 add_obstacle(obj);
-
-                // Identify the first enemy found as the target
-                if (obj.m_type == 'R' && to_shoot_row == -1 && to_shoot_col == -1) {
-                    to_shoot_row = obj.m_row;
-                    to_shoot_col = obj.m_col;
+                if (obj.m_type != '.' && obj.m_type != 'M' && obj.m_type != 'P' && obj.m_type != 'F' && obj.m_type != 'X') {
+                    potential_row = obj.m_row;
+                    potential_col = obj.m_col;
+                    found_robot = true;
+                    break;
                 }
             }
-        }
 
-        virtual bool get_shot_location(int& shot_row, int& shot_col) override 
-    {
-        if (to_shoot_row != -1 && to_shoot_col != -1) 
-        {
-            shot_row = to_shoot_row;
-            shot_col = to_shoot_col;
-            clear_target(); // Clear target after shooting
-            return true;
-        }
-        return false;
-    }
-
-    // Determines the next movement direction
-    void get_move_direction(int& move_direction, int& move_distance) override {
-        int current_row, current_col;
-        get_current_location(current_row, current_col);
-        int move = get_move_speed(); // Max movement range for this robot
-
-        // Step 1: Move up until row == 0
-        if (current_row > 0) {
-            move_direction = 1; // Up
-            move_distance = std::min(move, current_row); // Clamp to avoid going out of bounds
-            return;
-        }
-
-        // Step 2: Horizontal movement once row == 0
-        if (m_moving_right) {
-            // Move right if not at the right edge
-            if (current_col + move < m_board_col_max) {
-                move_direction = 3; // Right
-                move_distance = std::min(move, m_board_col_max - current_col - 1);
+            if (found_robot) {
+                to_shoot_row = potential_row;
+                to_shoot_col = potential_col;
             } else {
-                // Hit the right wall, switch to moving left
-                m_moving_right = false;
-                move_direction = 7; // Left
-                move_distance = 1;  
-            }
-        } else {
-            // Move left if not at the left edge
-            if (current_col - move >= 0) {
-                move_direction = 7; // Left
-                move_distance = std::min(move, current_col);
-            } else {
-                // Hit the left wall, switch to moving right
-                m_moving_right = true;
-                move_direction = 3; // Right
-                move_distance = 1;  
+                clear_target();
             }
         }
-    }
+
+        virtual bool get_shot_location(int& shot_row, int& shot_col) override {
+            if (to_shoot_row != -1 && to_shoot_col != -1) {
+                shot_row = to_shoot_row;
+                shot_col = to_shoot_col;
+                return true;
+            }
+            return false;
+        }
+
+        void get_move_direction(int& move_direction, int& move_distance) override {
+            int r, c;
+            get_current_location(r, c);
+            if (r == 0) m_at_top = true;
+
+            if (to_shoot_row != -1) {
+                move_distance = 0; 
+                return;
+            }
+
+            if (!m_at_top) {
+                move_direction = 1;
+                move_distance = 1;
+                return;
+            }
+
+            int next_col = m_moving_right ? c + 1 : c - 1;
+            if (next_col < 0 || next_col >= m_board_col_max) {
+                m_moving_right = !m_moving_right;
+                move_direction = m_moving_right ? 3 : 7;
+                move_distance = 1;
+                return;
+            }
+
+            if (is_blocked(r, next_col)) {
+                if (r + 1 < m_board_row_max) {
+                    move_direction = 5; 
+                } else {
+                    m_moving_right = !m_moving_right;
+                    move_direction = m_moving_right ? 3 : 7;
+                }
+                move_distance = 1;
+            } else {
+                move_direction = m_moving_right ? 3 : 7;
+                move_distance = 1;
+            }
+        }
 };
 
-extern "C" RobotBase* create_robot() {
-    return new Robot_MadSky();
-}
-
-extern "C" const char* robot_summary() {
-    return "Hugs top wall, railguns nearest target.";
-}
+extern "C" RobotBase* create_robot() { return new Robot_MadSky(); }
+extern "C" const char* robot_summary() { return "Moves to top and moves from wall to wall ; stops and fires until target is destroyed or moves; goes down once if obstacle in path."; }
